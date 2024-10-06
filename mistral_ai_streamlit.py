@@ -8,10 +8,7 @@ from pydantic import BaseModel
 from mistralai import Mistral
 import streamlit as st
 from pydub import AudioSegment
-import multiprocessing
 from functools import lru_cache
-import requests
-import time
 from concurrent.futures import ThreadPoolExecutor
 
 # Setup logging
@@ -80,8 +77,10 @@ class DialogueLine(BaseModel):
         voices = {
             "male-1": "onyx",
             "male-2": "echo",
+            "male-3": "fable",
             "female-1": "alloy",
             "female-2": "shimmer",
+            "female-3": "nova",
         }
         return voices[self.voice_character]
 
@@ -95,14 +94,15 @@ class PodcastDialogueSchema(BaseModel):
 
 
 @lru_cache(maxsize=10)
-def get_mistral_client():
-    """Get a cached Mistral API client."""
-    return Mistral(api_key=API_KEY)
+def get_mistral_client(api_key: str):
+    """Get a cached Mistral API client using the provided API key."""
+    return Mistral(api_key=api_key)
 
 
-async def image2podcast(model: str, image_url: str, prompt: str) -> str:
-    """Convert an image into a podcast dialogue using the Mistral model."""
-    client = get_mistral_client()
+async def image2podcast(model: str, image_url: str, prompt: str,
+                        mistral_api_key: str) -> str:
+    """Convert an image into a podcast dialogue using the Mistral model with the provided API key."""
+    client = get_mistral_client(api_key=mistral_api_key)
 
     messages = [{
         "role":
@@ -127,12 +127,13 @@ async def image2podcast(model: str, image_url: str, prompt: str) -> str:
         return ""
 
 
-def extract_podcast_dialogue(content: str) -> PodcastDialogueSchema:
-    """Extract podcast dialogue details from the raw chat content."""
+def extract_podcast_dialogue(content: str,
+                             openai_api_key: str) -> PodcastDialogueSchema:
+    """Extract podcast dialogue details from the raw chat content using OpenAI API."""
     try:
         from openai import OpenAI
 
-        client = OpenAI()
+        client = OpenAI(api_key=openai_api_key)
         completion = client.beta.chat.completions.parse(
             model="gpt-4o-2024-08-06",
             messages=[
@@ -154,16 +155,16 @@ def extract_podcast_dialogue(content: str) -> PodcastDialogueSchema:
 
 
 @lru_cache(maxsize=50)
-def generate_audio_cached(text: str, voice: str, api_key: str = None) -> bytes:
+def generate_audio_cached(text: str, voice: str, api_key: str) -> bytes:
     """Cached audio generation to avoid redundant requests."""
     return generate_audio(text, voice, api_key)
 
 
-def generate_audio(text: str, voice: str, api_key: str = None) -> bytes:
-    """Generate speech audio from text using the specified voice."""
+def generate_audio(text: str, voice: str, api_key: str) -> bytes:
+    """Generate speech audio from text using the specified voice and API key."""
     from openai import OpenAI
 
-    client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+    client = OpenAI(api_key=api_key)
 
     try:
         with client.audio.speech.with_streaming_response.create(
@@ -197,8 +198,8 @@ def play_audio_directly(audio_bytes: bytes):
     st.markdown(audio_html, unsafe_allow_html=True)
 
 
-async def generate_and_play_audio(
-        podcast_dialogue: PodcastDialogueSchema) -> AudioSegment:
+async def generate_and_play_audio(podcast_dialogue: PodcastDialogueSchema,
+                                  openai_api_key: str) -> AudioSegment:
     """Generate audio clips and play them in order. Return the combined audio."""
     audio_segments = []
     combined_audio = AudioSegment.empty()  # To store combined audio
@@ -206,14 +207,15 @@ async def generate_and_play_audio(
     # Generate audio clips in parallel
     with ThreadPoolExecutor() as executor:
         tasks = [
-            executor.submit(generate_audio_cached, line.content, line.voice)
+            executor.submit(generate_audio_cached, line.content, line.voice,
+                            openai_api_key)
             for line in podcast_dialogue.dialogue
         ]
 
         # Collect audio segments in order
         for task in tasks:
             try:
-                audio_bytes = task.result(timeout=30)  # 30s timeout
+                audio_bytes = task.result(timeout=10)  # 10s timeout
                 audio_segments.append(audio_bytes)  # Collect audio bytes
             except Exception as e:
                 logging.error(f"Error generating audio for line: {e}")
@@ -229,8 +231,10 @@ async def generate_and_play_audio(
             color = {
                 "male-1": "blue",
                 "male-2": "green",
+                "male-3": "red",
                 "female-1": "purple",
                 "female-2": "orange",
+                "female-3": "brown",
             }.get(line.voice_character, "black")  # Default color
 
             st.markdown(
@@ -247,6 +251,19 @@ async def generate_and_play_audio(
 async def main():
     st.title("Podcast Generator")
 
+    # API Key inputs with fallback to environment variables
+    mistral_api_key = st.text_input(
+        "Enter your Mistral API key for image understanding"
+        " (will try to the environment variable `MISTRAL_API_KEY` if not provided)",
+        type="password")
+    openai_api_key = st.text_input(
+        "Enter your OpenAI API key for TTS"
+        " (will try to the environment variable `OPENAI_API_KEY` if not provided)",
+        type="password")
+
+    mistral_api_key = mistral_api_key or os.getenv("MISTRAL_API_KEY")
+    openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+
     # Select podcast mode
     podcast_mode = st.radio("Select Podcast Mode:",
                             ("Dan Mode", "Normal Mode"))
@@ -256,8 +273,16 @@ async def main():
         "Choose an image source:",
         ("Upload an Image", "Image URL", "Use Example Image", "Take a Photo"))
 
+    # If API keys are not provided, show a warning message
+    if not mistral_api_key or not openai_api_key:
+        st.warning(
+            "Please provide your API keys to generate the podcast."
+            " You can find or create your API keys from the respective platforms."
+        )
+        return
+
     uploaded_file = None
-    image_url = None
+    image_url = EXAMPLE_IMAGE_URL
     camera_input = None
 
     if image_option == "Upload an Image":
@@ -288,32 +313,41 @@ async def main():
         with st.spinner("Generating podcast..."):
             # Choose the prompt based on the selected mode
             prompt = PODCAST_GEN_PROMPT_DAN if podcast_mode == "Dan Mode" else PODCAST_GEN_PROMPT
-            podcast_script = await image2podcast(model=MODEL_NAME,
-                                                 image_url=image_url,
-                                                 prompt=prompt)
+            podcast_script = await image2podcast(
+                model=MODEL_NAME,
+                image_url=image_url,
+                prompt=prompt,
+                mistral_api_key=mistral_api_key)
             st.write(podcast_script)
-            podcast_dialogue = extract_podcast_dialogue(podcast_script)
+            podcast_dialogue = extract_podcast_dialogue(
+                podcast_script, openai_api_key)
             st.write(podcast_dialogue)
 
             if podcast_dialogue.podcast_name:
                 st.subheader(f"Podcast: {podcast_dialogue.podcast_name}")
-                combined_audio = await generate_and_play_audio(podcast_dialogue
-                                                               )
+                combined_audio = await generate_and_play_audio(
+                    podcast_dialogue, openai_api_key)
 
                 # Save combined podcast audio
                 combined_audio_file = io.BytesIO()
                 combined_audio.export(combined_audio_file, format="mp3")
 
                 # Provide download link
-                st.download_button("Download Podcast",
+                st.download_button("Download The Whole Podcast",
                                    data=combined_audio_file.getvalue(),
-                                   file_name="podcast.mp3", mime="audio/mpeg")
+                                   file_name="podcast.mp3",
+                                   mime="audio/mpeg")
 
-                # Button to play the whole podcast
-                if st.button("Play Entire Podcast"):
-                    play_audio_directly(combined_audio_file.getvalue())
+                # Get the podcast app URL
+                podcast_url = "https://img2podcast.streamlit.app/"
+
+                # Share the podcast app on x/twitter
+                st.write("Share the podcast on x/twitter:")
+                st.markdown(
+                    f"<a href='https://twitter.com/intent/tweet?text=Check out this podcast app! 🎙️🔥&url={podcast_url}'>Share on Twitter</a>",
+                    unsafe_allow_html=True)
 
 
-# Run the app
+# Run the main function in an asyncio event loop
 if __name__ == "__main__":
     asyncio.run(main())
