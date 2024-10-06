@@ -3,9 +3,8 @@ import asyncio
 import io
 import base64
 import logging
-from typing import List, Literal
+from typing import List, Literal, Any
 from pydantic import BaseModel
-from mistralai import Mistral
 import streamlit as st
 from pydub import AudioSegment
 from functools import lru_cache
@@ -15,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 logging.basicConfig(level=logging.INFO)
 
 # Constants and Configuration
-MODEL_NAME = "pixtral-12b-2409"
+VLM_MODEL_NAME = "pixtral-12b-2409"
 EXAMPLE_IMAGE_URL = "https://tripfixers.com/wp-content/uploads/2019/11/eiffel-tower-with-snow.jpeg"
 
 # Add the podcast prompts
@@ -103,32 +102,62 @@ class PodcastDialogueSchema(BaseModel):
 @lru_cache(maxsize=10)
 def get_mistral_client(api_key: str):
     """Get a cached Mistral API client using the provided API key."""
+    from mistralai import Mistral
     return Mistral(api_key=api_key)
 
 
-async def image2podcast(model: str, image_url: str, prompt: str,
-                        mistral_api_key: str) -> str:
-    """Convert an image into a podcast dialogue using the Mistral model with the provided API key."""
-    client = get_mistral_client(api_key=mistral_api_key)
+@lru_cache(maxsize=10)
+def get_openai_client(api_key: str):
+    """Get a cached OpenAI API client using the provided API key."""
+    from openai import OpenAI
+    return OpenAI(api_key=api_key)
 
-    messages = [{
-        "role":
-        "user",
-        "content": [
-            {
-                "type": "text",
-                "text": prompt,
-            },
-            {
-                "type": "image_url",
-                "image_url": image_url
-            },
-        ],
-    }]
+
+async def image2podcast(client: Any, model: str, image_url: str,
+                        prompt: str) -> str:
+    """Convert an image into a podcast dialogue using the model with the provided API key."""
 
     try:
-        chat_response = client.chat.complete(model=model, messages=messages)
-        return chat_response.choices[0].message.content
+        if client.__class__.__name__ == "Mistral":
+            messages = [{
+                "role":
+                "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt,
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": image_url
+                    },
+                ],
+            }]
+            chat_response = client.chat.complete(model=model,
+                                                 messages=messages)
+            return chat_response.choices[0].message.content
+
+        if client.__class__.__name__ == "OpenAI":
+            messages = [{
+                "role":
+                "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt,
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_url
+                        }
+                    },
+                ],
+            }]
+            chat_response = client.chat.completions.create(model=model,
+                                                           messages=messages)
+            return chat_response.choices[0].message.content
+
     except Exception as e:
         logging.error(f"Error in image2podcast: {e}")
         return ""
@@ -286,7 +315,17 @@ async def main():
             "Please provide your API keys to generate the podcast."
             " You can find or create your API keys from the respective platforms."
         )
-        return
+        if not mistral_api_key:
+            st.warning(
+                "Mistral API key is missing. Using OpenAI Model Instead.")
+            if openai_api_key:
+                vlm_client = get_openai_client(openai_api_key)
+                vlm_model_name = "gpt-4o"
+            else:
+                return
+    else:
+        vlm_client = get_mistral_client(mistral_api_key)
+        vlm_model_name = VLM_MODEL_NAME
 
     uploaded_file = None
     image_url = EXAMPLE_IMAGE_URL
@@ -320,11 +359,11 @@ async def main():
         with st.spinner("Generating podcast..."):
             # Choose the prompt based on the selected mode
             prompt = PODCAST_GEN_PROMPT_DAN if podcast_mode == "Dan Mode" else PODCAST_GEN_PROMPT
-            podcast_script = await image2podcast(
-                model=MODEL_NAME,
-                image_url=image_url,
-                prompt=prompt,
-                mistral_api_key=mistral_api_key)
+
+            podcast_script = await image2podcast(client=vlm_client,
+                                                 model=vlm_model_name,
+                                                 image_url=image_url,
+                                                 prompt=prompt)
             st.write(podcast_script)
             podcast_dialogue = extract_podcast_dialogue(
                 podcast_script, openai_api_key)
