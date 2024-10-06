@@ -46,6 +46,7 @@ And finally, cut the fluff! We’re here for the maddening points, not your uncl
 
 Let the hilarity (or impending doom) ensue! And remember, if you’re not laughing, you’re probably crying. Or both. It’s a fine line, really.
 """
+
 PODCAST_GEN_PROMPT = """
 Your Task: Create a Dynamic Podcast Dialogue from an Image
 
