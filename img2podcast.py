@@ -340,10 +340,11 @@ async def main():
                 combined_audio.export(combined_audio_file, format="mp3")
 
                 # Provide download link
-                st.download_button("Download The Whole Podcast",
-                                   data=combined_audio_file.getvalue(),
-                                   file_name="podcast.mp3",
-                                   mime="audio/mpeg")
+                st.download_button(
+                    "Download The Whole Podcast",
+                    data=combined_audio_file.getvalue(),
+                    file_name=f"podcast-{podcast_dialogue.podcast_name}.mp3",
+                    mime="audio/mpeg")
 
                 # Get the podcast app URL
                 podcast_url = "https://pixtral-podcast.streamlit.app/"
