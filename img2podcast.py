@@ -69,7 +69,14 @@ Stay Focused: Filter out irrelevant information. The goal is to highlight the mo
 # Define a schema for dialogue structure
 class DialogueLine(BaseModel):
     speaker_name: str
-    voice_character: Literal["male-1", "male-2", "female-1", "female-2"]
+    voice_character: Literal[
+        "male-1",
+        "male-2",
+        "male-3",
+        "female-1",
+        "female-2",
+        "female-3",
+    ]
     content: str
 
     @property
