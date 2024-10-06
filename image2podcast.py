@@ -386,7 +386,7 @@ async def main():
                     mime="audio/mpeg")
 
                 # Get the podcast app URL
-                podcast_url = "https://image2podcast.streamlit.app/"
+                podcast_url = "https://image2podcast.camel-ai.org/ "
 
                 # Share the podcast app on x/twitter
                 st.write("Share the podcast on x/twitter:")
