@@ -15,7 +15,6 @@ from concurrent.futures import ThreadPoolExecutor
 logging.basicConfig(level=logging.INFO)
 
 # Constants and Configuration
-API_KEY = os.getenv("MISTRAL_API_KEY")
 MODEL_NAME = "pixtral-12b-2409"
 EXAMPLE_IMAGE_URL = "https://tripfixers.com/wp-content/uploads/2019/11/eiffel-tower-with-snow.jpeg"
 
